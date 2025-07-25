@@ -4,9 +4,19 @@ Copyright © 2025 NAME HERE <EMAIL ADDRESS>
 package cmd
 
 import (
+	"fmt"
 	"os"
 
+	"github.com/joho/godotenv"
 	"github.com/spf13/cobra"
+)
+
+// Configuration for authentication
+var (
+	ZitadelIssuer  string
+	AuthServiceURL string
+	ClientID       string
+	Scope          string
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -44,5 +54,24 @@ func init() {
 
 	// Cobra also supports local flags, which will only run
 	// when this action is called directly.
+
+	// Load environment variables from .env file
+	if err := godotenv.Load(); err != nil {
+		fmt.Printf("Warning: Failed to load .env file, please ensure it exists: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Set configuration from environment variables
+	ZitadelIssuer = os.Getenv("ZITADEL_ISSUER")
+	AuthServiceURL = os.Getenv("AUTH_SERVICE_URL")
+	ClientID = os.Getenv("CLIENT_ID")
+	Scope = os.Getenv("SCOPE")
+
+	// Validate required configuration (excluding AUTH_PROVIDER, as it’s command-specific)
+	if ZitadelIssuer == "" || AuthServiceURL == "" || ClientID == "" || Scope == "" {
+		fmt.Println("Error: Missing required configuration in .env file (ZITADEL_ISSUER, AUTH_SERVICE_URL, CLIENT_ID, SCOPE)")
+		os.Exit(1)
+	}
+
 	rootCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
 }

@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 )
 
@@ -20,12 +21,12 @@ type TokenCache struct {
 
 // SaveTokenCache saves the token to a local cache file
 func SaveTokenCache(token *TokenResponse) error {
-	homeDir, err := os.UserHomeDir()
+	confDir, err := os.UserConfigDir()
 	if err != nil {
 		return err
 	}
 
-	cacheDir := filepath.Join(homeDir, ".shush")
+	cacheDir := filepath.Join(confDir, "shush")
 	if err := os.MkdirAll(cacheDir, 0700); err != nil {
 		return err
 	}
@@ -44,22 +45,24 @@ func SaveTokenCache(token *TokenResponse) error {
 	}
 	defer file.Close()
 
-	// Set restrictive permissions on the token file
-	if err := file.Chmod(0600); err != nil {
+	// Set restrictive permissions on the token file (best-effort on Windows)
+	if err := file.Chmod(0600); err != nil && runtime.GOOS != "windows" {
 		return err
 	}
 
-	return json.NewEncoder(file).Encode(cache)
+	encoder := json.NewEncoder(file)
+	encoder.SetIndent("", "  ")
+	return encoder.Encode(cache)
 }
 
-// LoadTokenCache loads the cached token if it exists and is valid
+// LoadTokenCache loads the cached token if it exists
 func LoadTokenCache() (*TokenCache, error) {
-	homeDir, err := os.UserHomeDir()
+	confDir, err := os.UserConfigDir()
 	if err != nil {
 		return nil, err
 	}
 
-	cacheFile := filepath.Join(homeDir, ".shush", "token_cache.json")
+	cacheFile := filepath.Join(confDir, "shush", "token_cache.json")
 	file, err := os.Open(cacheFile)
 	if err != nil {
 		return nil, err
@@ -69,11 +72,6 @@ func LoadTokenCache() (*TokenCache, error) {
 	var cache TokenCache
 	if err := json.NewDecoder(file).Decode(&cache); err != nil {
 		return nil, err
-	}
-
-	// Check if token is expired (with 5 minute buffer)
-	if time.Now().Add(5 * time.Minute).After(cache.ExpiresAt) {
-		return nil, fmt.Errorf("token expired")
 	}
 
 	return &cache, nil
@@ -106,19 +104,17 @@ func RefreshAccessToken(refreshToken, authServiceURL, clientID string) (*TokenRe
 
 // GetValidToken returns a valid access token, refreshing if necessary
 func GetValidToken(authServiceURL, clientID string) (string, error) {
-	// Try to load cached token
-	cache, err := LoadTokenCache()
-	if err == nil {
-		return cache.AccessToken, nil
-	}
+	cache, _ := LoadTokenCache()
+	if cache != nil {
+		// If token is still valid, return it
+		if time.Now().Add(5 * time.Minute).Before(cache.ExpiresAt) {
+			return cache.AccessToken, nil
+		}
 
-	// If cache failed but we have a refresh token, try to refresh
-	if cache != nil && cache.RefreshToken != "" {
+		// Try to refresh
 		refreshed, err := RefreshAccessToken(cache.RefreshToken, authServiceURL, clientID)
 		if err == nil {
-			// Save the refreshed token
-			if saveErr := SaveTokenCache(refreshed); saveErr != nil {
-			}
+			_ = SaveTokenCache(refreshed)
 			return refreshed.AccessToken, nil
 		}
 	}

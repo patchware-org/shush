@@ -121,3 +121,14 @@ func GetValidToken(authServiceURL, clientID string) (string, error) {
 
 	return "", fmt.Errorf("no valid token available, please run 'login' command")
 }
+
+// RemoveTokenCache deletes the cached token file
+func RemoveTokenCache() error {
+	confDir, err := os.UserConfigDir()
+	if err != nil {
+		return err
+	}
+
+	cacheFile := filepath.Join(confDir, "shush", "token_cache.json")
+	return os.Remove(cacheFile)
+}

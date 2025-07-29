@@ -46,15 +46,6 @@ func Execute() {
 }
 
 func init() {
-	// Here you will define your flags and configuration settings.
-	// Cobra supports persistent flags, which, if defined here,
-	// will be global for your application.
-
-	// rootCmd.PersistentFlags().StringVar(&cfgFile, "config", "", "config file (default is $HOME/.shush.yaml)")
-
-	// Cobra also supports local flags, which will only run
-	// when this action is called directly.
-
 	// Load environment variables from .env file
 	if err := godotenv.Load(); err != nil {
 		fmt.Printf("Warning: Failed to load .env file, please ensure it exists: %v\n", err)
@@ -67,7 +58,7 @@ func init() {
 	ClientID = os.Getenv("CLIENT_ID")
 	Scope = os.Getenv("SCOPE")
 
-	// Validate required configuration (excluding AUTH_PROVIDER, as it’s command-specific)
+	// Validate required configuration (excluding AUTH_PROVIDER, as it's command-specific)
 	if ZitadelIssuer == "" || AuthServiceURL == "" || ClientID == "" || Scope == "" {
 		fmt.Println("Error: Missing required configuration in .env file (ZITADEL_ISSUER, AUTH_SERVICE_URL, CLIENT_ID, SCOPE)")
 		os.Exit(1)

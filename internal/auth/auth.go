@@ -11,12 +11,6 @@ import (
 	"time"
 )
 
-// AuthProvider defines the interface for authentication providers
-type AuthProvider interface {
-	GetDeviceCode() (*DeviceAuthResponse, error)
-	PollForToken(deviceCode string, interval, expiresIn int) (*TokenResponse, error)
-}
-
 // DeviceAuthResponse represents the response from the device authorization endpoint
 type DeviceAuthResponse struct {
 	DeviceCode              string `json:"device_code"`
@@ -38,17 +32,24 @@ type TokenResponse struct {
 	ErrorDesc    string `json:"error_description,omitempty"`
 }
 
-// ZitadelAuthProvider implements the AuthProvider interface for Zitadel
-type ZitadelAuthProvider struct {
+// OIDCDiscovery represents the OIDC discovery document
+type OIDCDiscovery struct {
+	DeviceAuthEndpoint string `json:"device_authorization_endpoint"`
+	TokenEndpoint      string `json:"token_endpoint"`
+	Issuer             string `json:"issuer"`
+}
+
+// AuthConfig holds the OAuth2/OIDC configuration
+type AuthConfig struct {
 	Issuer         string
 	AuthServiceURL string
 	ClientID       string
 	Scope          string
 }
 
-func (z *ZitadelAuthProvider) GetDeviceCode() (*DeviceAuthResponse, error) {
-	// Discovery document fetching
-	discoveryURL := z.Issuer + "/.well-known/openid-configuration"
+// GetDiscoveryDocument fetches and parses the OIDC discovery document
+func GetDiscoveryDocument(issuer string) (*OIDCDiscovery, error) {
+	discoveryURL := issuer + "/.well-known/openid-configuration"
 	resp, err := http.Get(discoveryURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to fetch discovery document: %w", err)
@@ -60,21 +61,29 @@ func (z *ZitadelAuthProvider) GetDeviceCode() (*DeviceAuthResponse, error) {
 		return nil, fmt.Errorf("discovery endpoint returned status %d: %s", resp.StatusCode, string(body))
 	}
 
-	var discovery struct {
-		DeviceAuthEndpoint string `json:"device_authorization_endpoint"`
-	}
+	var discovery OIDCDiscovery
 	if err := json.NewDecoder(resp.Body).Decode(&discovery); err != nil {
 		return nil, fmt.Errorf("failed to decode discovery document: %w", err)
 	}
 
-	deviceAuthEndpoint := z.AuthServiceURL + "/device_authorization"
+	return &discovery, nil
+}
+
+// GetDeviceCode initiates the OAuth2 device authorization flow
+func GetDeviceCode(config *AuthConfig) (*DeviceAuthResponse, error) {
+	discovery, err := GetDiscoveryDocument(config.Issuer)
+	if err != nil {
+		return nil, err
+	}
+
+	deviceAuthEndpoint := config.AuthServiceURL + "/device_authorization"
 	if discovery.DeviceAuthEndpoint != "" {
 		deviceAuthEndpoint = discovery.DeviceAuthEndpoint
 	}
 
 	data := url.Values{}
-	data.Set("client_id", z.ClientID)
-	data.Set("scope", z.Scope)
+	data.Set("client_id", config.ClientID)
+	data.Set("scope", config.Scope)
 
 	req, err := http.NewRequest("POST", deviceAuthEndpoint, strings.NewReader(data.Encode()))
 	if err != nil {
@@ -84,7 +93,7 @@ func (z *ZitadelAuthProvider) GetDeviceCode() (*DeviceAuthResponse, error) {
 	req.Header.Set("Accept", "application/json")
 
 	client := &http.Client{Timeout: 30 * time.Second}
-	resp, err = client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
 	}
@@ -115,28 +124,14 @@ func (z *ZitadelAuthProvider) GetDeviceCode() (*DeviceAuthResponse, error) {
 	return &deviceResp, nil
 }
 
-func (z *ZitadelAuthProvider) PollForToken(deviceCode string, interval, expiresIn int) (*TokenResponse, error) {
-	// Discovery document fetching
-	discoveryURL := z.Issuer + "/.well-known/openid-configuration"
-	resp, err := http.Get(discoveryURL)
+// PollForToken polls the token endpoint until the user completes authentication
+func PollForToken(config *AuthConfig, deviceCode string, interval, expiresIn int) (*TokenResponse, error) {
+	discovery, err := GetDiscoveryDocument(config.Issuer)
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch discovery document: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("discovery endpoint returned status %d: %s", resp.StatusCode, string(body))
+		return nil, err
 	}
 
-	var discovery struct {
-		TokenEndpoint string `json:"token_endpoint"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&discovery); err != nil {
-		return nil, fmt.Errorf("failed to decode discovery document: %w", err)
-	}
-
-	tokenEndpoint := z.AuthServiceURL + "/token"
+	tokenEndpoint := config.AuthServiceURL + "/token"
 	if discovery.TokenEndpoint != "" {
 		tokenEndpoint = discovery.TokenEndpoint
 	}
@@ -155,7 +150,7 @@ func (z *ZitadelAuthProvider) PollForToken(deviceCode string, interval, expiresI
 			data := url.Values{}
 			data.Set("grant_type", "urn:ietf:params:oauth:grant-type:device_code")
 			data.Set("device_code", deviceCode)
-			data.Set("client_id", z.ClientID)
+			data.Set("client_id", config.ClientID)
 
 			resp, err := http.PostForm(tokenEndpoint, data)
 			if err != nil {

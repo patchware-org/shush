@@ -9,72 +9,118 @@ import (
 	"path/filepath"
 	"runtime"
 	"time"
+
+	"github.com/patchware-org/shush/utils/config"
 )
 
-// TokenCache represents the stored token information
-type TokenCache struct {
+// Token represents a standardized token structure
+type Token struct {
 	AccessToken  string    `json:"access_token"`
 	RefreshToken string    `json:"refresh_token"`
 	IDToken      string    `json:"id_token"`
+	TokenType    string    `json:"token_type,omitempty"`
 	ExpiresAt    time.Time `json:"expires_at"`
+	IssuedAt     time.Time `json:"issued_at"`
 }
 
-// SaveTokenCache saves the token to a local cache file
-func SaveTokenCache(token *TokenResponse) error {
-	confDir, err := os.UserConfigDir()
+// getTokenCacheFile returns the path to the token cache file
+func getTokenCacheFile() (string, error) {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(configDir, config.TokenCacheFile), nil
+}
+
+// SaveToken saves the token to the file system
+func SaveToken(tokenResp *TokenResponse) error {
+	cacheFile, err := getTokenCacheFile()
 	if err != nil {
 		return err
 	}
 
-	cacheDir := filepath.Join(confDir, "shush")
-	if err := os.MkdirAll(cacheDir, 0700); err != nil {
+	configDir, err := config.GetConfigDir()
+	if err != nil {
 		return err
 	}
 
-	cache := TokenCache{
-		AccessToken:  token.AccessToken,
-		RefreshToken: token.RefreshToken,
-		IDToken:      token.IDToken,
-		ExpiresAt:    time.Now().Add(time.Duration(token.ExpiresIn) * time.Second),
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		return fmt.Errorf("failed to create config directory: %w", err)
 	}
 
-	cacheFile := filepath.Join(cacheDir, "token_cache.json")
+	now := time.Now()
+	token := &Token{
+		AccessToken:  tokenResp.AccessToken,
+		RefreshToken: tokenResp.RefreshToken,
+		IDToken:      tokenResp.IDToken,
+		TokenType:    tokenResp.TokenType,
+		ExpiresAt:    now.Add(time.Duration(tokenResp.ExpiresIn) * time.Second),
+		IssuedAt:     now,
+	}
+
 	file, err := os.Create(cacheFile)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to create token cache file: %w", err)
 	}
 	defer file.Close()
 
 	// Set restrictive permissions on the token file (best-effort on Windows)
 	if err := file.Chmod(0600); err != nil && runtime.GOOS != "windows" {
-		return err
+		return fmt.Errorf("failed to set file permissions: %w", err)
 	}
 
 	encoder := json.NewEncoder(file)
 	encoder.SetIndent("", "  ")
-	return encoder.Encode(cache)
+	if err := encoder.Encode(token); err != nil {
+		return fmt.Errorf("failed to encode token: %w", err)
+	}
+
+	return nil
 }
 
-// LoadTokenCache loads the cached token if it exists
-func LoadTokenCache() (*TokenCache, error) {
-	confDir, err := os.UserConfigDir()
+// LoadToken loads the cached token from the file system
+func LoadToken() (*Token, error) {
+	cacheFile, err := getTokenCacheFile()
 	if err != nil {
 		return nil, err
 	}
 
-	cacheFile := filepath.Join(confDir, "shush", "token_cache.json")
 	file, err := os.Open(cacheFile)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to open token cache file: %w", err)
 	}
 	defer file.Close()
 
-	var cache TokenCache
-	if err := json.NewDecoder(file).Decode(&cache); err != nil {
-		return nil, err
+	var token Token
+	if err := json.NewDecoder(file).Decode(&token); err != nil {
+		return nil, fmt.Errorf("failed to decode token: %w", err)
 	}
 
-	return &cache, nil
+	return &token, nil
+}
+
+// RemoveToken deletes the cached token file
+func RemoveToken() error {
+	cacheFile, err := getTokenCacheFile()
+	if err != nil {
+		return err
+	}
+
+	if err := os.Remove(cacheFile); err != nil {
+		return fmt.Errorf("failed to remove token cache file: %w", err)
+	}
+	return nil
+}
+
+// IsTokenValid checks if the cached token exists and is not expired
+func IsTokenValid() bool {
+	token, err := LoadToken()
+	if err != nil {
+		return false
+	}
+
+	// Consider token invalid if it expires within 5 minutes
+	return time.Now().Add(5 * time.Minute).Before(token.ExpiresAt)
 }
 
 // RefreshAccessToken refreshes the access token using the refresh token
@@ -86,13 +132,13 @@ func RefreshAccessToken(refreshToken, authServiceURL, clientID string) (*TokenRe
 
 	resp, err := http.PostForm(authServiceURL+"/token", data)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to make refresh request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	var tokenResp TokenResponse
 	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
-		return nil, err
+		return nil, fmt.Errorf("failed to decode refresh response: %w", err)
 	}
 
 	if tokenResp.Error != "" {
@@ -104,20 +150,31 @@ func RefreshAccessToken(refreshToken, authServiceURL, clientID string) (*TokenRe
 
 // GetValidToken returns a valid access token, refreshing if necessary
 func GetValidToken(authServiceURL, clientID string) (string, error) {
-	cache, _ := LoadTokenCache()
-	if cache != nil {
-		// If token is still valid, return it
-		if time.Now().Add(5 * time.Minute).Before(cache.ExpiresAt) {
-			return cache.AccessToken, nil
-		}
-
-		// Try to refresh
-		refreshed, err := RefreshAccessToken(cache.RefreshToken, authServiceURL, clientID)
+	// Check if we have a valid token
+	if IsTokenValid() {
+		token, err := LoadToken()
 		if err == nil {
-			_ = SaveTokenCache(refreshed)
-			return refreshed.AccessToken, nil
+			return token.AccessToken, nil
 		}
 	}
 
-	return "", fmt.Errorf("no valid token available, please run 'login' command")
+	// Try to load token and refresh if needed
+	token, err := LoadToken()
+	if err != nil {
+		return "", fmt.Errorf("no valid token available, please run 'login' command")
+	}
+
+	// Try to refresh the token
+	refreshed, err := RefreshAccessToken(token.RefreshToken, authServiceURL, clientID)
+	if err != nil {
+		return "", fmt.Errorf("token refresh failed, please run 'login' command: %w", err)
+	}
+
+	// Save the refreshed token
+	if err := SaveToken(refreshed); err != nil {
+		// Log warning but still return the token
+		fmt.Printf("Warning: failed to save refreshed token: %v\n", err)
+	}
+
+	return refreshed.AccessToken, nil
 }

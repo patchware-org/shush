@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/spf13/cobra"
-
 	"github.com/patchware-org/shush/internal/auth"
+	"github.com/patchware-org/shush/internal/crypto"
+	"github.com/spf13/cobra"
 )
 
 // loginCmd represents the login command
@@ -19,7 +19,6 @@ var loginCmd = &cobra.Command{
 			fmt.Printf("Authentication failed: %v\n", err)
 			os.Exit(1)
 		}
-		fmt.Println("Successfully authenticated!")
 	},
 }
 
@@ -34,26 +33,48 @@ func init() {
 
 // performDeviceAuth implements the OAuth2 device authorization flow
 func performDeviceAuth() error {
-	// Initialize the auth provider based on configuration
-	var provider auth.AuthProvider
+	// Check if user is already logged in with a valid token
+	if auth.IsTokenValid() {
+		fmt.Println("You are already logged in with a valid token.")
+		return nil
+	}
+
+	// Check if we have an expired token that can be refreshed
+	if existingToken, err := auth.LoadToken(); err == nil && existingToken.RefreshToken != "" {
+		fmt.Println("Existing token is expired. Attempting to refresh...")
+
+		refreshed, err := auth.RefreshAccessToken(existingToken.RefreshToken, AuthServiceURL, ClientID)
+		if err == nil {
+			// Save the refreshed token
+			if err := auth.SaveToken(refreshed); err != nil {
+				fmt.Printf("Warning: failed to save refreshed token: %v\n", err)
+			} else {
+				fmt.Println("Token refreshed successfully!")
+				return nil
+			}
+		}
+		fmt.Println("Token refresh failed. Proceeding with new authentication...")
+	}
+
+	// Validate required configuration
 	providerType := os.Getenv("AUTH_PROVIDER")
 	if providerType == "" {
 		return fmt.Errorf("missing required configuration in .env file (AUTH_PROVIDER)")
 	}
-	switch providerType {
-	case "zitadel":
-		provider = &auth.ZitadelAuthProvider{
-			Issuer:         ZitadelIssuer,
-			AuthServiceURL: AuthServiceURL,
-			ClientID:       ClientID,
-			Scope:          Scope,
-		}
-	default:
+	if providerType != "zitadel" {
 		return fmt.Errorf("unsupported auth provider: %s", providerType)
 	}
 
+	// Create auth configuration
+	config := &auth.AuthConfig{
+		Issuer:         ZitadelIssuer,
+		AuthServiceURL: AuthServiceURL,
+		ClientID:       ClientID,
+		Scope:          Scope,
+	}
+
 	// Request device and user codes
-	deviceResp, err := provider.GetDeviceCode()
+	deviceResp, err := auth.GetDeviceCode(config)
 	if err != nil {
 		return fmt.Errorf("failed to request device code: %w", err)
 	}
@@ -67,15 +88,42 @@ func performDeviceAuth() error {
 	fmt.Println("Waiting for you to complete authentication...")
 
 	// Poll for token
-	token, err := provider.PollForToken(deviceResp.DeviceCode, deviceResp.Interval, deviceResp.ExpiresIn)
+	token, err := auth.PollForToken(config, deviceResp.DeviceCode, deviceResp.Interval, deviceResp.ExpiresIn)
 	if err != nil {
 		return fmt.Errorf("failed to get token: %w", err)
 	}
 
 	// Save token to cache
-	if err := auth.SaveTokenCache(token); err != nil {
+	if err := auth.SaveToken(token); err != nil {
 		return fmt.Errorf("failed to save token: %w", err)
 	}
 
+	// Generate or ensure key pair exists for E2E encryption
+	if err := ensureKeyPair(); err != nil {
+		return fmt.Errorf("failed to setup encryption keys: %w", err)
+	}
+
+	fmt.Println("Successfully authenticated!")
+	return nil
+}
+
+// ensureKeyPair generates a new key pair if one doesn't exist
+func ensureKeyPair() error {
+	if crypto.KeyPairExists() {
+		fmt.Println("Encryption keys already exist.")
+		return nil
+	}
+
+	fmt.Println("Generating encryption keys for secure communication...")
+	keyPair, err := crypto.GenerateKeyPair()
+	if err != nil {
+		return fmt.Errorf("failed to generate key pair: %w", err)
+	}
+
+	if err := crypto.SaveKeyPair(keyPair); err != nil {
+		return fmt.Errorf("failed to save key pair: %w", err)
+	}
+
+	fmt.Println("Encryption keys generated successfully.")
 	return nil
 }

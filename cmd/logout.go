@@ -4,8 +4,12 @@ Copyright © 2025 NAME HERE <EMAIL ADDRESS>
 package cmd
 
 import (
+	"errors"
 	"fmt"
+	"os"
 
+	"github.com/patchware-org/shush/internal/auth"
+	"github.com/patchware-org/shush/internal/crypto"
 	"github.com/spf13/cobra"
 )
 
@@ -14,23 +18,35 @@ var logoutCmd = &cobra.Command{
 	Use:   "logout",
 	Short: "Log out and revoke your session token",
 	Long: `Deletes your local authentication token and ends your current session.
-
 You must log in again to push, pull, or access remote secrets.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Println("logout called")
+		if err := performLogout(); err != nil {
+			fmt.Printf("Logout failed: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("Successfully logged out!")
 	},
 }
 
 func init() {
 	rootCmd.AddCommand(logoutCmd)
+}
 
-	// Here you will define your flags and configuration settings.
+// performLogout removes the cached token and encryption keys
+func performLogout() error {
+	// Remove authentication token
+	if err := auth.RemoveToken(); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("you are not currently logged in")
+		}
+		return fmt.Errorf("failed to remove authentication token: %w", err)
+	}
 
-	// Cobra supports Persistent Flags which will work for this command
-	// and all subcommands, e.g.:
-	// logoutCmd.PersistentFlags().String("foo", "", "A help for foo")
+	// Remove encryption keys
+	if err := crypto.RemoveKeyPair(); err != nil {
+		// Log warning but don't fail logout if keys can't be removed
+		fmt.Printf("Warning: failed to remove encryption keys: %v\n", err)
+	}
 
-	// Cobra supports local flags which will only run when this command
-	// is called directly, e.g.:
-	// logoutCmd.Flags().BoolP("toggle", "t", false, "Help message for toggle")
+	return nil
 }

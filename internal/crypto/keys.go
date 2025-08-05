@@ -12,7 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 
-	"github.com/patchware-org/shush/utils/config"
+	"github.com/patchware-org/shush/internal/config"
 )
 
 const (

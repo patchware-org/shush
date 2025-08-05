@@ -4,14 +4,15 @@ Copyright © 2025 NAME HERE <EMAIL ADDRESS>
 package cmd
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/spf13/cobra"
 	"github.com/go-git/go-git/v5"
+	"github.com/spf13/cobra"
 
 	"github.com/patchware-org/shush/internal/config"
 	"github.com/patchware-org/shush/internal/version"
@@ -51,10 +52,9 @@ func init() {
 	initCmd.Flags().StringP("initial-scope", "s", "main", "defines the project initial scope name")
 }
 
-
 func initializeProject(projectDir, initialScope string) error {
 	// Create project directory if it doesn't exist
-	if err := os.MkdirAll(projectDir, 0744); err != nil {
+	if err := os.MkdirAll(projectDir, 0755); err != nil {
 		return fmt.Errorf("failed to create project directory: %w", err)
 	}
 
@@ -67,8 +67,13 @@ func initializeProject(projectDir, initialScope string) error {
 		fmt.Print("Do you want to override the existing configuration? (y/N): ")
 
 		var response string
-		fmt.Scanln(&response)
-		response = strings.ToLower(strings.TrimSpace(response))
+		reader := bufio.NewReader(os.Stdin)
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Println("Failed to read input. Initialization aborted.")
+			return nil
+		}
+		response = strings.ToLower(strings.TrimSpace(input))
 
 		if response != "y" && response != "yes" {
 			fmt.Println("Initialization aborted.")

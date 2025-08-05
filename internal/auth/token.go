@@ -10,7 +10,7 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/patchware-org/shush/utils/config"
+	"github.com/patchware-org/shush/internal/config"
 )
 
 // Token represents a standardized token structure

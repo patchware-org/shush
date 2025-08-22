@@ -31,9 +31,9 @@ shush encrypts your secrets locally, syncs them through a secure backend, and de
 them only for the users and environments you authorize.
 
 Start with 'shush init' to begin managing secrets in your current project.`,
-	// Uncomment the following line if your bare application
-	// has an action associated with it:
-	// Run: func(cmd *cobra.Command, args []string) { },
+	Run: func(cmd *cobra.Command, args []string) {
+		fmt.Println("Welcome to shush! Use 'shush --help' to see available commands.")
+	},
 }
 
 // Execute adds all child commands to the root command and sets flags appropriately.
